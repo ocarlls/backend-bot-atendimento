@@ -1,32 +1,42 @@
 const express = require('express');
 const app = express();
-const port = process.env.PORT || 3000;
+const { WebhookClient } = require('dialogflow-fulfillment');
+var bodyParser = require('body-parser');
 
-app.use(express.json());
+app.use(express.static("public"));
+app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({extended:true}));
 
-const pedidos = [
+const pedidos = [ 
   { pedidoId: "123", status: "Enviado" },
   { pedidoId: "456", status: "Processando" },
   { pedidoId: "789", status: "Entregue" }
 ];
 
 // Endpoint que recebe as solicitações do Dialogflow
-app.post('/webhook', (req, res) => {
-    const intent = req.body.queryResult.intent.displayName;
+app.post('/dialogflow', (req, res) => {
+    const agent = new WebhookClient({request: req, response: res});
+    let intentMap = new Map();
+    intentMap.set('consulta-status-de-pedido', consultaPedido);
+    agent.handleRequest(intentMap);
     
-    if (intent === 'Consulta de Status de Pedido') {
+    
+  
+  function consultaPedido(agent){
         const pedidoId = req.body.queryResult.parameters.pedidoId;
-        const pedido = pedidos.find(p => p.pedidoId === pedidoId);
+        const pedido = pedidos.find(p => p.pedidoId == pedidoId);
         
         if (pedido) {
-            res.json({
-                fulfillmentText: `O status do seu pedido #${pedidoId} é: ${pedido.status}`
-            });
+            agent.add(`O status do seu pedido #${pedidoId} é: ${pedido.status}`);
+        } if(pedidoId == ""){
+          agent.add(`Por favor, forneça o número de seu pedido`);
+          
         } else {
-            res.json({
-                fulfillmentText: `Não encontramos o pedido #${pedidoId}. Verifique o número do pedido e tente novamente.`
-            });
+            agent.add(`Não encontramos o pedido #${pedidoId}. Verifique o número do pedido e tente novamente.`);
         }
+  }/*
+    if (intent === 'consulta-status-de-pedido') {
+        
     } else if (intent === 'Abertura de Ticket de Suporte') {
         const problema = req.body.queryResult.parameters.problema;
         // Aqui você pode salvar o problema em uma base de dados, por exemplo.
@@ -37,9 +47,9 @@ app.post('/webhook', (req, res) => {
         res.json({
             fulfillmentText: 'Estou aqui para ajudar com qualquer outra solicitação!'
         });
-    }
+    }*/
 });
 
-app.listen(port, () => {
-    console.log(`Servidor rodando na porta ${port}`); 
+app.listen(process.env.PORT, () => {
+    console.log(`Servidor rodando na porta ${process.env.PORT}`); 
 });

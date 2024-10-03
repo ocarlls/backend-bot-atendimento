@@ -6,7 +6,13 @@
     "start": "node index.js"
   },
   "dependencies": {
+    "body-parser": "^1.20.3",
     "chatbot-backend": "file:",
-    "express": "^4.17.1"
-  }
+    "dialogflow-fulfillment": "^0.6.1",
+    "express": "^4.21.0"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": ""
 }
