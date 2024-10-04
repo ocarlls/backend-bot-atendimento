@@ -6,7 +6,23 @@
     "start": "node index.js"
   },
   "dependencies": {
+    "@fastify/formbody": "^7.4.0",
+    "@fastify/static": "^6.10.2",
+    "@fastify/view": "^8.0.0",
+    "@slack/web-api": "^7.5.0",
+    "actions-on-google": "^3.0.0",
+    "axios": "^1.7.7",
+    "body-parser": "^1.20.3",
     "chatbot-backend": "file:",
-    "express": "^4.17.1"
-  }
+    "dialogflow-fulfillment": "^0.6.1",
+    "express": "^4.21.0",
+    "fastify": "^4.21.0",
+    "fuse.js": "^7.0.0",
+    "handlebars": "^4.7.8",
+    "mongoose": "^8.7.0"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": ""
 }
