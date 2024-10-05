@@ -120,16 +120,22 @@ app.post('/dialogflow', async (req, res) => {
   
   console.log('debugggggggg', JSON.stringify(usuario));
 
+  
+  // Verifique se o usuário está aguardando atendimento
   if (usuario && usuario.aguardandoAtendimento) {
-    console.log('entrou aquiiiiiiiiiii');
-    // Se o usuário está aguardando atendimento, ignore o processamento da intenção
-    sendSlackMessage(newChannelId, userMessage);
-    return res.status(200).send(); // Responder com sucesso sem chamar handleRequest
+    console.log('Usuário aguardando atendimento, mensagem não processada.');
+    // Enviar a mensagem para o Slack
+    await sendSlackMessage(newChannelId, userMessage);
+    // Retorna um status 200 e encerra a execução sem processar a intenção
+    return res.status(200).send(); 
   }
 
+  // Chame a função para lidar com as intenções
+  await handleIntent(agent, res);
+});
 
-
-
+// Função para lidar com as intenções
+async function handleIntent(agent, res) {
   // Mapeie intents para funções
   let intentMap = new Map();
   intentMap.set('atendimento-humano', atendimento);
@@ -139,8 +145,9 @@ app.post('/dialogflow', async (req, res) => {
   intentMap.set('consulta-condicoes-pagamento', consultaCondicoesPagamento);
 
   // Adicione lógica para tratar plataforma específica (Telegram)
-  agent.handleRequest(intentMap);
-});
+  await agent.handleRequest(intentMap);
+}
+
 async function sendSlackMessage(channelId, messageText) {
   try {
     await slackClient.chat.postMessage({
@@ -426,9 +433,9 @@ app.post('/slack/events', async (req, res) => {
   if (event && event.type === 'message' && !event.subtype) {
     // Isso é uma mensagem que não é um subtipo (ou seja, uma mensagem normal)
     console.log(`Nova mensagem no canal ${event.channel}: ${event.text}, ${telegramChatId}`);
-    
-    // Aqui você pode processar a mensagem como desejar
-    if(event.channel == newChannelId){
+
+    // Verifique se a mensagem não começa com "Mensagem do Telegram:"
+    if (event.channel === newChannelId && !event.text.startsWith('Mensagem do Telegram:')) {
       sendTelegramMessage(telegramChatId, event.text);
     }
   }
