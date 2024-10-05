@@ -15,9 +15,12 @@ const slackClient = new WebClient(slackToken);
 const slackChannelId = process.env.SLACK_CHANNEL_ID;
 const telegramToken = process.env.TELEGRAM_TOKEN;
 const teamId = process.env.SLACK_TEAM_ID;
-let chatId;
+var telegramChatId;
 const telegramApiUrl = `https://api.telegram.org/bot${telegramToken}`;
-let newChannelId;
+var newChannelId;
+var telegramUserName;
+var telegramUserId;
+  
 // Middleware para parsing de JSON e URL encoded
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -53,7 +56,8 @@ const Pedido = mongoose.model('Pedido', pedidoSchema);
 
 const usuarioSchema = new mongoose.Schema({
   telegramId: String,
-  aguardandoAtendimento: { type: Boolean, default: false }
+  aguardandoAtendimento: { type: Boolean, default: false },
+  atendenteId: { type: String, default: null } // Adicione isso
 });
 
 const Usuario = mongoose.model('Usuario', usuarioSchema);
@@ -100,19 +104,33 @@ const metodosPagamento = [
 ];
 
 // Rota para tratar requisições do Dialogflow
-app.post('/dialogflow', (req, res) => {
-  //console.log("Requisição recebida do Dialogflow:", req.body);
-  
+app.post('/dialogflow', async (req, res) => {
   if (!req.body || !req.body.queryResult) {
     return res.status(400).send('Requisição inválida para o Dialogflow.');
   }
 
   const agent = new WebhookClient({ request: req, response: res });
+  
+  // Extraia o ID do usuário do Telegram
+  const telegramUserId = agent.originalRequest.payload.data.from.id; // O ID do usuário do Telegram
+  telegramChatId = telegramUserId;
+  const usuario = await Usuario.findOne({ telegramId: telegramUserId });
+  const data = agent.originalRequest.payload.data;
+  const userMessage = agent.query;
+  
+  console.log('debugggggggg', JSON.stringify(usuario));
 
-  // Verificar de qual plataforma a requisição está vindo (Telegram, no seu caso)
-  const requestSource = agent.requestSource;
+  if (usuario && usuario.aguardandoAtendimento) {
+    console.log('entrou aquiiiiiiiiiii');
+    // Se o usuário está aguardando atendimento, ignore o processamento da intenção
+    sendSlackMessage(newChannelId, userMessage);
+    return res.status(200).send(); // Responder com sucesso sem chamar handleRequest
+  }
 
-  // Mapear intents para funções
+
+
+
+  // Mapeie intents para funções
   let intentMap = new Map();
   intentMap.set('atendimento-humano', atendimento);
   intentMap.set('consulta-status-de-pedido', consultaPedido);
@@ -120,81 +138,89 @@ app.post('/dialogflow', (req, res) => {
   intentMap.set('consulta-funcionalidades-produto', consultaFuncionalidadesProduto);
   intentMap.set('consulta-condicoes-pagamento', consultaCondicoesPagamento);
 
-  // Adicionar lógica para tratar plataforma específica (Telegram)
+  // Adicione lógica para tratar plataforma específica (Telegram)
   agent.handleRequest(intentMap);
 });
+async function sendSlackMessage(channelId, messageText) {
+  try {
+    await slackClient.chat.postMessage({
+      channel: channelId,
+      text: `Mensagem do Telegram: ${messageText}`,
+    });
+  } catch (error) {
+    console.error('Erro ao enviar mensagem para o Slack:', error);
+  }
+}
+
 
 // Função de atendimento ajustada para lidar com diferentes plataformas
 async function atendimento(agent) {
-  const requestSource = agent.requestSource;
-
-  // Log para inspecionar a estrutura do payload
-
-  let telegramUserName;
-  let telegramUserId;
-
-  // Verificar se é uma mensagem ou uma interação de callback
-   if (agent.originalRequest.payload && agent.originalRequest.payload.data) {
-    const data = agent.originalRequest.payload.data;
-    //console.log('aquiii ' + JSON.stringify(data, null, 2)); // 2 é o número de espaços para a indentação
-    
-    if (data.from) {
-      telegramUserId = data.from.id; // Este é o ID do usuário
-      telegramUserName = data.from.first_name; // Ou use data.from.username se preferir
-    }
-    // Acesse o chat_id do objeto chat
-    if (data.chat) {
-      chatId = data.chat.id; // Acesse o chat_id corretamente
-    }
-    else if (data.callback_query) {
-      telegramUserId = data.callback_query.from.id;
-      telegramUserName = data.callback_query.from.first_name; // Adicione esta linha
-    }
+  // Extraindo o ID do usuário do Telegram
+  const data = agent.originalRequest.payload.data;
+  
+  if (data && data.from) {
+      telegramUserId = data.from.id; // ID do usuário
+      telegramUserName = data.from.first_name; // Nome do usuário
   }
 
-  // Verificar se o ID do usuário foi obtido corretamente
   if (!telegramUserId) {
-    console.error("Erro: Não foi possível obter o ID do usuário do Telegram.");
-    agent.add('Desculpe, não conseguimos conectar com um atendente humano no momento.');
-    return;
+      console.error("Erro: Não foi possível obter o ID do usuário do Telegram.");
+      agent.add('Desculpe, não conseguimos conectar com um atendente humano no momento.');
+      return;
   }
 
   const userMessage = agent.query;
 
-  if (requestSource === 'TELEGRAM') {
-    agent.add('Você será atendido em breve. Aguardando conexão com um atendente humano.');
+  // Verifica se o usuário já existe
+  let usuario = await Usuario.findOne({ telegramId: telegramUserId });
+
+  if (!usuario) {
+      // Cria um novo usuário se não existir
+      usuario = new Usuario({
+          telegramId: telegramUserId,
+          aguardandoAtendimento: true, // Atualize diretamente para aguardando
+          atendenteId: null,
+      });
+      await usuario.save(); // Salva o novo usuário no banco
   } else {
-    agent.add('Estamos processando seu atendimento. Por favor, aguarde.');
+      // Se já existe, apenas atualize o status
+      usuario.aguardandoAtendimento = true; 
+      await usuario.save(); // Atualiza o status para aguardando
   }
 
-  const buttonValue = JSON.stringify({
-  userName: telegramUserName,
-  chatTelegramId: chatId
-});
+  agent.add('Você será atendido em breve. Aguardando conexão com um atendente humano.');
 
+  const buttonValue = JSON.stringify({
+      userName: telegramUserName,
+      chatTelegramId: telegramChatId
+  });
+
+  // Envia mensagem para o Slack com o botão
   await slackClient.chat.postMessage({
-    channel: slackChannelId,
-    text: `Novo atendimento solicitado no Telegram.`,
-    attachments: [
-      {
-        text: `Mensagem do usuário: "${userMessage}". Para responder, clique no botão abaixo:`,
-        callback_id: 'atendimento_callback',
-        actions: [
+      channel: slackChannelId,
+      text: `Novo atendimento solicitado no Telegram.`,
+      attachments: [
           {
-            type: 'button',
-            text: 'Iniciar atendimento',
-            value: buttonValue, // Usando a string JSON aqui
-            name: 'atendimento_callback',
-            action_id: 'atendimento_callback',
+              text: `Mensagem do usuário: "${userMessage}". Para responder, clique no botão abaixo:`,
+              callback_id: 'atendimento_callback',
+              actions: [
+                  {
+                      type: 'button',
+                      text: 'Iniciar atendimento',
+                      value: buttonValue,
+                      name: 'atendimento_callback',
+                      action_id: 'atendimento_callback',
+                  }
+              ]
           }
-        ]
-      }
-    ]
+      ]
   }).catch(error => {
-    console.error('Erro ao enviar mensagem para o Slack:', error);
-    agent.add('Desculpe, não conseguimos conectar com um atendente humano no momento.');
+      console.error('Erro ao enviar mensagem para o Slack:', error);
+      agent.add('Desculpe, não conseguimos conectar com um atendente humano no momento.');
   });
 }
+
+
 
 
 // Função para consultar status de pedido
@@ -322,6 +348,11 @@ app.post('/slack/actions', async (req, res) => {
         }
       ]
     });
+    await Usuario.updateOne({ telegramId: telegramUserId }, { 
+      aguardandoAtendimento: true,
+      atendenteId: userSlackId // ID do atendente do Slack
+    });
+
 
     return res.send({ text: 'Você está iniciando o atendimento no canal!' }); // Mensagem personalizada ao Slack
   }
@@ -370,6 +401,10 @@ async function criarCanalEAdicionarAtendente(userSlackId, telegramUserName, chat
       channel: newChannelId,
       text: `Usuário ${userSlackName} adicionado ao canal`,
     });
+    
+    await Usuario.updateOne({ telegramId: telegramUserId }, { 
+      atendenteId: userSlackId // ID do atendente do Slack
+    });
 
     console.log('Mensagem enviada com sucesso:', res.ts);
 
@@ -390,10 +425,11 @@ app.post('/slack/events', async (req, res) => {
 
   if (event && event.type === 'message' && !event.subtype) {
     // Isso é uma mensagem que não é um subtipo (ou seja, uma mensagem normal)
-    console.log(`Nova mensagem no canal ${event.channel}: ${event.text}`);
+    console.log(`Nova mensagem no canal ${event.channel}: ${event.text}, ${telegramChatId}`);
+    
     // Aqui você pode processar a mensagem como desejar
     if(event.channel == newChannelId){
-      sendTelegramMessage(chatId, event.text);
+      sendTelegramMessage(telegramChatId, event.text);
     }
   }
 
