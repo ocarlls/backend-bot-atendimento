@@ -14,8 +14,10 @@ const slackToken = process.env.SLACK_TOKEN;
 const slackClient = new WebClient(slackToken);
 const slackChannelId = process.env.SLACK_CHANNEL_ID;
 const telegramToken = process.env.TELEGRAM_TOKEN;
+const teamId = process.env.SLACK_TEAM_ID;
+let chatId;
 const telegramApiUrl = `https://api.telegram.org/bot${telegramToken}`;
-
+let newChannelId;
 // Middleware para parsing de JSON e URL encoded
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -130,7 +132,6 @@ async function atendimento(agent) {
 
   let telegramUserName;
   let telegramUserId;
-  let chatId;
 
   // Verificar se é uma mensagem ou uma interação de callback
    if (agent.originalRequest.payload && agent.originalRequest.payload.data) {
@@ -161,7 +162,6 @@ async function atendimento(agent) {
   const userMessage = agent.query;
 
   if (requestSource === 'TELEGRAM') {
-    await sendTelegramMessage(telegramUserId, 'Um atendente humano foi solicitado. Por favor, aguarde enquanto alguém te atende.');
     agent.add('Você será atendido em breve. Aguardando conexão com um atendente humano.');
   } else {
     agent.add('Estamos processando seu atendimento. Por favor, aguarde.');
@@ -248,8 +248,6 @@ function consultaCondicoesPagamento(agent) {
 
 // Rota para tratar ações do Slack
 app.post('/slack/actions', async (req, res) => {
-  //console.log('Payload recebido:', req.body);
-  
   let payload;
   try {
     payload = JSON.parse(req.body.payload); // Parse do payload enviado pelo Slack
@@ -258,37 +256,93 @@ app.post('/slack/actions', async (req, res) => {
     return res.sendStatus(400);
   }
 
-
   const action = payload.actions[0]; // Ação disparada no Slack
-  const { userId, userName, chatTelegramId} = JSON.parse(action.value); // Decodifique o valor
+
+  // Verificar a ação clicada
+  if (action.action_id === 'acessar_novo_canal') {
+    console.log('clicouuuuuuuuuuuuuuuuuuu');
+
+
+    // Criar a URL do canal
+    const channelLink = `<slack://channel?team=${teamId}&id=${newChannelId}>`;
+
+    // Enviar mensagem personalizada para o usuário do Slack
+    await slackClient.chat.postMessage({
+      channel: slackChannelId, // ID do usuário do Slack que clicou no botão
+      text: `Você está cuidando desse atendimento? continue o atendimento por aqui: ${channelLink}`
+    });
 
     
-  if (action.name == 'atendimento_callback') {
+
+    return res.send(200); // Responder ao Slack com mensagem personalizada
+  }
+
+
+  // Extraindo valores do botão, verificando se o valor é JSON
+  let userId, userName, chatTelegramId;
+  try {
+    ({ userId, userName, chatTelegramId } = JSON.parse(action.value));
+  } catch (error) {
+    console.error('Erro ao decodificar o valor da ação:', error);
+    return res.sendStatus(400);
+  }
+
+  // Verifica se a ação é a de atendimento
+  if (action.name === 'atendimento_callback') {
     const telegramUserId = userId;  // O valor do Telegram User ID
     const userSlackId = payload.user.id; // ID do usuário do Slack
     const userSlackName = payload.user.name;
-    const telegramUserName = userName;
-    //console.log('aquiii ' + JSON.stringify(payload, null, 2)); // 2 é o número de espaços para a indentação
-
 
     // Criar canal e adicionar o atendente
-    const newChannelId = await criarCanalEAdicionarAtendente(userSlackId, telegramUserName, chatTelegramId, userSlackName);
+    newChannelId = await criarCanalEAdicionarAtendente(userSlackId, userName, chatTelegramId, userSlackName);
+    const newChannelLink = `<slack://channel?team=${teamId}&id=${newChannelId}>`;
 
     // Responder ao Slack que a ação foi concluída
-    res.send({ text: 'Você está iniciando o atendimento no canal!' });
+    await slackClient.chat.postMessage({
+      channel: slackChannelId,
+      text: `Usuário ${userSlackName} foi adicionado ao canal.`,
+      blocks: [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: "Acessar o novo canal => "
+          },
+          accessory: {
+            type: "button",
+            text: {
+              type: "plain_text",
+              text: "Acessar",
+              emoji: true
+            },
+            style: "primary",
+            value: newChannelLink,
+            action_id: "acessar_novo_canal"
+          }
+        }
+      ]
+    });
+
+    return res.send({ text: 'Você está iniciando o atendimento no canal!' }); // Mensagem personalizada ao Slack
   }
- else {
-    console.error('Action ID não reconhecido:', action.action_id);
-    res.sendStatus(400);
-  }
+
+  console.error('Action ID não reconhecido:', action.action_id);
+  return res.sendStatus(400); // Resposta de erro
 });
 
 async function criarCanalEAdicionarAtendente(userSlackId, telegramUserName, chatTelegramId, userSlackName) {
   try {
     // Criação do canal
+    const now = new Date();
+    // Formatar a data e hora para um nome de canal válido
+    const formattedDateTime = now.toISOString().replace(/T/, '-').replace(/:/g, '-').split('.')[0]; // YYYY-MM-DD-HH-MM-SS
+    // Substituir caracteres especiais no nome do usuário e no nome do canal
+    const safeUserName = userSlackName.replace(/[^a-z0-9]/g, '-').toLowerCase(); // Remove caracteres não permitidos
+    const channelName = `atendimento-${formattedDateTime}-${safeUserName}`;
+    
     const createChannelRes = await slackClient.conversations.create({
-      name: `atendimento--${Date.now()}`,  // Nome único do canal
-      is_private: false,            // Público (se preferir privado, defina como true)
+      name: channelName,  // Nome único do canal
+      is_private: false,  // Público (se preferir privado, defina como true)
     });
 
     if (!createChannelRes.ok) {
@@ -310,7 +364,6 @@ async function criarCanalEAdicionarAtendente(userSlackId, telegramUserName, chat
       return;
     }
 
-
     sendTelegramMessage(chatTelegramId, `Olá ${telegramUserName}, eu sou o ${userSlackName} e estarei dando continuidade em seu atendimento!`);
     // Enviar mensagem para o novo canal
     const res = await slackClient.chat.postMessage({
@@ -326,6 +379,28 @@ async function criarCanalEAdicionarAtendente(userSlackId, telegramUserName, chat
     console.error('Erro ao criar o canal ou adicionar o atendente:', error);
   }
 }
+
+app.post('/slack/events', async (req, res) => {
+  const { type, event } = req.body;
+
+  if (type === 'url_verification') {
+    // O Slack envia uma verificação de URL quando você ativa os eventos
+    return res.status(200).send(req.body.challenge);
+  }
+
+  if (event && event.type === 'message' && !event.subtype) {
+    // Isso é uma mensagem que não é um subtipo (ou seja, uma mensagem normal)
+    console.log(`Nova mensagem no canal ${event.channel}: ${event.text}`);
+    // Aqui você pode processar a mensagem como desejar
+    if(event.channel == newChannelId){
+      sendTelegramMessage(chatId, event.text);
+    }
+  }
+
+  // Responder com 200 para o Slack
+  res.status(200).send();
+});
+
 
 
 // Função para enviar mensagem via Telegram
